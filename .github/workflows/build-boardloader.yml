@@ -1,4 +1,3 @@
-
 name: Build Trezor Model T Boardloader
 
 'on':
@@ -22,24 +21,23 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@v31
 
-      - name: Build Boardloader
+      - name: Build Boardloader (Non-Production)
         run: |
           nix-shell --run "
+            export PRODUCTION=0
             uv sync &&
-            uv run xtask build boardloader \
-              -m t2t1 \
-              --production=false
+            uv run xtask build boardloader -m t2t1
           "
 
-      - name: Find Boardloader
+      - name: Verify Build Output
         run: |
-          find core/build -type f -iname '*boardloader*.bin'
+          ls -lh core/build-xtask/artifacts/T2T1/
+          find core/build-xtask -type f -iname '*boardloader*.bin'
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: trezor-model-t-boardloader
-          path: core/build/artifacts/
+          path: core/build-xtask/artifacts/T2T1/
           if-no-files-found: error
           retention-days: 14
-
