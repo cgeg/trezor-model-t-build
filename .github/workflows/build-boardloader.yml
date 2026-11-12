@@ -1,1 +1,45 @@
 
+name: Build Trezor Model T Boardloader
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Trezor Firmware
+        uses: actions/checkout@v4
+        with:
+          repository: trezor/trezor-firmware
+          ref: main
+          submodules: recursive
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Build Boardloader
+        run: |
+          nix-shell --run "
+            uv sync &&
+            uv run xtask build boardloader \
+              -m t2t1 \
+              --production=false
+          "
+
+      - name: Find Boardloader
+        run: |
+          find core/build -type f -iname '*boardloader*.bin'
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: trezor-model-t-boardloader
+          path: core/build/artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
