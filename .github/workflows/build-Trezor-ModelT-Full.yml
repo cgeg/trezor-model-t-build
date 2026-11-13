@@ -1,4 +1,4 @@
-name: Build Trezor Model T Development Suite
+name: Build Trezor Model T Development Suite (No-Sig Test)
 
 'on':
   workflow_dispatch:
@@ -31,13 +31,59 @@ jobs:
         run: |
           git submodule update --init --recursive --force
 
+      - name: Patch Bootloader to Ignore Signature
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "=== Patching Bootloader Signature Verification ==="
+          python3 -c '
+          import glob, re
+
+          # 搜尋 bootloader 與相關共用模組中的簽章與標頭驗證函式
+          target_files = glob.glob("core/embed/**/*.c", recursive=True)
+          patched_count = 0
+
+          for filepath in target_files:
+              if "bootloader" not in filepath and "image" not in filepath and "check" not in filepath:
+                  continue
+              with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                  content = f.read()
+
+              new_content = content
+              # 1. 讓 check_firmware_header 或類似的標頭簽章驗證直接回傳 sectrue / true
+              new_content = re.sub(
+                  r"(secbool\s+(?:check_firmware_header|verify_firmware|firmware_verify|check_image_header)\s*\([^)]*\)\s*\{)",
+                  r"\1 return sectrue;",
+                  new_content
+              )
+              # 2. 讓簽章比對底層函式 (如 secp256r1_verify / ed25519_sign_open) 在 bootloader 專案中直接通過
+              if "bootloader" in filepath:
+                  new_content = re.sub(
+                      r"(secbool\s+[a-zA-Z0-9_]*verify[a-zA-Z0-9_]*\s*\([^)]*\)\s*\{)",
+                      r"\1 return sectrue;",
+                      new_content
+                  )
+
+              if new_content != content:
+                  with open(filepath, "w", encoding="utf-8") as f:
+                      f.write(new_content)
+                  print(f"Patched: {filepath}")
+                  patched_count += 1
+
+          print(f"Total files patched: {patched_count}")
+          if patched_count == 0:
+              print("WARNING: No files matched regex, listing bootloader files for inspection:")
+              for f in glob.glob("core/embed/projects/bootloader/**/*.c", recursive=True):
+                  print(" -", f)
+          '
+
       - name: Install Nix
         uses: cachix/install-nix-action@v31
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-            substituters = https://cache.nixos.org https://nix-community.cachix.org
+            substituters = https://nixos.org https://cachix.org
             trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs=
             connect-timeout = 30
             stalled-download-timeout = 120
@@ -49,22 +95,14 @@ jobs:
         run: |
           echo "=== Nix Version ==="
           nix --version
-          echo "=== Nix Cache Configuration ==="
-          nix show-config | grep -E 'substituters|trusted-public-keys'
-          echo "=== Testing Cache Connectivity ==="
-          curl -I --retry 5 --retry-delay 5 https://nixos.org
-          curl -I --retry 5 --retry-delay 5 https://cachix.org
-          echo "=== Disk Space & Memory ==="
-          df -h
-          free -h
+          curl -I --retry 5 --retry-delay 5 https://nixos.org/nix-cache-info
+          curl -I --retry 5 --retry-delay 5 https://cachix.org/nix-cache-info
 
-      - name: Build & Sign Model T Development Suite
+      - name: Build Model T Development Suite (No-Sig)
         shell: bash
         run: |
           set -Eeuo pipefail
           echo "=== Starting Trezor Model T Build ==="
-          
-          # 加入重試機制，避免暫時性網路波動導致快取下載中斷
           for attempt in 1 2 3; do
             echo "=== Attempt $attempt to enter nix-shell and build ==="
             if nix-shell --show-trace --run '
@@ -78,15 +116,7 @@ jobs:
               echo "=== Firmware: Development ==="
               uv run xtask build firmware -m t2t1 --bootloader-devel
 
-              echo "=== Signing Firmware with Development Keys ==="
-              cp core/build/artifacts/T2T1/firmware.bin core/build/artifacts/T2T1/firmware-unsigned.bin
-              if uv run trezorctl --version >/dev/null 2>&1; then
-                uv run trezorctl firmware sign --devel core/build/artifacts/T2T1/firmware.bin
-              else
-                trezorctl firmware sign --devel core/build/artifacts/T2T1/firmware.bin
-              fi
-
-              echo "=== All Builds & Signing Completed ==="
+              echo "=== All Builds Completed ==="
             ' 2>&1 | tee build.log; then
               break
             else
@@ -104,17 +134,9 @@ jobs:
           mkdir -p dist/bootloader
           mkdir -p dist/firmware
 
-          echo "=== Checking Build Artifacts ==="
-          if [ ! -d "$SRC" ]; then
-            echo "ERROR: Artifact directory not found: $SRC"
-            find core/build -type f -name '*.bin' || true
-            exit 1
-          fi
-
-          for file in boardloader bootloader firmware firmware-unsigned; do
+          for file in boardloader bootloader firmware; do
             if [ ! -s "$SRC/$file.bin" ]; then
               echo "ERROR: Missing binary: $SRC/$file.bin"
-              find core/build -type f -name '*.bin' || true
               exit 1
             fi
           done
@@ -122,25 +144,18 @@ jobs:
           cp "$SRC/boardloader.bin" dist/boardloader/
           cp "$SRC/bootloader.bin" dist/bootloader/
           cp "$SRC/firmware.bin" dist/firmware/
-          cp "$SRC/firmware-unsigned.bin" dist/firmware/
 
-          echo "=== Generated Binaries ==="
           ls -lhR dist/
-
-          echo "=== SHA256 Checksums ==="
           sha256sum \
             dist/boardloader/boardloader.bin \
             dist/bootloader/bootloader.bin \
             dist/firmware/firmware.bin \
-            dist/firmware/firmware-unsigned.bin \
             | tee dist/SHA256SUMS.txt
-
-          echo "=== Build Verification Completed ==="
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: trezor-model-t-development-suite
+          name: trezor-model-t-nosig-suite
           path: dist/
           if-no-files-found: error
           retention-days: 14
