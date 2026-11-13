@@ -1,4 +1,4 @@
-name: Build Trezor Model T Dev Suite (Signed with Dev Keys)
+name: Build Trezor Model T Dev Suite (Dev Key Signed)
 
 'on':
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
         with:
           name: nix-community
 
-      - name: Build & Dev-Sign Model T Non-Production
+      - name: Build & Sign Model T Non-Production Suite
         run: |
           set -euo pipefail
           nix-shell --run '
@@ -59,12 +59,12 @@ jobs:
 
             echo "=== 4. Sign Bootloader & Firmware with Dev Keys ==="
             SRC="core/build/artifacts/T2T1"
-            uv run python3 -c "
-from trezorlib import firmware
-print(\"Checking trezorlib signing tools...\")
-"
-            uv run trezorctl firmware sign --dev "$SRC/bootloader.bin" || true
-            uv run trezorctl firmware sign --dev "$SRC/firmware.bin" || true
+            uv run --directory core/tools python -m trezor_core_tools.headertool -D "$SRC/bootloader.bin"
+            uv run --directory core/tools python -m trezor_core_tools.headertool -D "$SRC/firmware.bin"
+
+            echo "=== 5. Verify Signatures ==="
+            uv run --directory core/tools python -m trezor_core_tools.headertool "$SRC/bootloader.bin"
+            uv run --directory core/tools python -m trezor_core_tools.headertool "$SRC/firmware.bin"
           '
 
       - name: Collect & Verify Binaries
@@ -81,7 +81,10 @@ print(\"Checking trezorlib signing tools...\")
           cp "$SRC/boardloader.bin" dist/boardloader/
           cp "$SRC/bootloader.bin" dist/bootloader/
           cp "$SRC/firmware.bin" dist/firmware/
+
+          echo "=== Model T Dev-Signed Binaries ==="
           ls -lhR dist/
+          echo "=== SHA256 Verification ==="
           sha256sum \
             dist/boardloader/boardloader.bin \
             dist/bootloader/bootloader.bin \
