@@ -1,4 +1,4 @@
-name: Build Trezor Model T Full Suite (Fast & Non-Production)
+name: Build Trezor Model T Full Suite (Non-Production)
 
 'on':
   workflow_dispatch:
@@ -9,7 +9,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Free Disk Space
@@ -27,22 +27,26 @@ jobs:
       - name: Ensure Submodules
         run: git submodule update --init --recursive --force
 
-      - name: Build Full Suite via Official Docker (Non-Production)
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Setup Cachix (Skip compiling Rust/LLVM from source)
+        uses: cachix/cachix-action@v15
+        with:
+          name: nix-community
+
+      - name: Build Boardloader, Bootloader & Firmware (Non-Production)
         run: |
           set -e
-          docker run --rm \
-            -v "$(pwd):/workspace" \
-            -w /workspace \
-            -e PRODUCTION=0 \
-            -e TREZOR_MODEL=T2T1 \
-            ghcr.io/trezor/trezor-firmware-env.nix:latest \
-            nix-shell --run "
-              set -e
-              export PRODUCTION=0
-              uv run xtask build boardloader -m t2t1
-              uv run xtask build bootloader -m t2t1
-              uv run xtask build firmware -m t2t1
-            "
+          nix-shell --run "
+            set -e
+            export PRODUCTION=0
+            uv run xtask build boardloader -m t2t1
+            uv run xtask build bootloader -m t2t1
+            uv run xtask build firmware -m t2t1
+          "
 
       - name: Collect & Verify All Binaries
         run: |
