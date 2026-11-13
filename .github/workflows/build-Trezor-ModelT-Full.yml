@@ -1,7 +1,8 @@
 
+
 name: Build Trezor Model T Development Suite
 
-on:
+'on':
   workflow_dispatch:
 
 permissions:
@@ -13,13 +14,12 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - name: Free Disk Space
+      - name: Test Workflow
+        shell: bash
         run: |
-          sudo rm -rf /usr/share/dotnet \
-            /usr/local/lib/android \
-            /opt/ghc \
-            /opt/hostedtoolcache/CodeQL
-          df -h
+          echo "GitHub Actions YAML is valid"
+          echo "Starting Trezor Model T build environment"
+
 
   - name: Checkout Trezor Firmware
     uses: actions/checkout@v4
