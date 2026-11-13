@@ -1,4 +1,4 @@
-name: Build Trezor Model T Development Suite (No-Sig Test)
+name: Build Trezor Model T Development Suite (Docker No-Sig)
 
 'on':
   workflow_dispatch:
@@ -9,7 +9,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 60
     steps:
       - name: Free Disk Space
         run: |
@@ -41,7 +41,6 @@ jobs:
           python3 -c '
           import glob, re
 
-          # 僅針對 bootloader 專案資料夾進行精準修改，不碰共用底層以免影響 boardloader
           bl_files = glob.glob("core/embed/projects/bootloader/**/*.c", recursive=True)
           patched = 0
 
@@ -50,8 +49,6 @@ jobs:
                   content = f.read()
 
               new_content = content
-              # 將 bootloader 內部呼叫簽章或標頭檢查失敗的判斷條件替換為通過
-              # 1. 常見寫法: if (sectrue != check_firmware_header(...)) 或 if (!check_...)
               new_content = re.sub(
                   r"if\s*\(\s*sectrue\s*!=\s*(check_[a-zA-Z0-9_]+|verify_[a-zA-Z0-9_]+)\s*\(",
                   r"if (secfalse == sectrue && sectrue != \1(",
@@ -72,26 +69,24 @@ jobs:
           print(f"Total bootloader files patched: {patched}")
           '
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-        with:
-          nix_path: nixpkgs=channel:nixos-unstable
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-            substituters = https://nixos.org https://cachix.org
-            trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs=
-            connect-timeout = 30
-            stalled-download-timeout = 120
-            max-jobs = auto
-            cores = 2
-            fallback = true
-
-      - name: Build Model T Development Suite
+      - name: Build Model T Development Suite via Official Docker
         shell: bash
         run: |
           set -Eeuo pipefail
-          echo "=== Starting Trezor Model T Build ==="
-          nix-shell --show-trace --run '
+          echo "=== Checking build-docker.sh ==="
+          ls -la build-docker.sh
+
+          # 使用 Trezor 官方提供的 Docker 映像檔直接編譯，完全避開 Nix 快取問題
+          ./build-docker.sh --skip-core --skip-legacy --models T2T1 --no-init || true
+
+          # 直接使用官方 Docker 映像執行 xtask 精準編譯開發版套件
+          IMAGE=$(grep -E 'IMAGE=' build-docker.sh | head -n 1 | cut -d'=' -f2 | tr -d '"'\''')
+          if [ -z "$IMAGE" ]; then
+            IMAGE="ghcr.io/trezor/trezor-firmware-env.nix:latest"
+          fi
+          echo "Using Docker Image: $IMAGE"
+
+          docker run --rm -v "$(pwd):/repo" -w /repo "$IMAGE" bash -c '
             set -euo pipefail
             echo "=== Boardloader: Development ==="
             uv run xtask build boardloader -m t2t1 --bootloader-devel
@@ -102,7 +97,7 @@ jobs:
             echo "=== Firmware: Development ==="
             uv run xtask build firmware -m t2t1 --bootloader-devel
 
-            echo "=== All Builds Completed ==="
+            echo "=== All Docker Builds Completed ==="
           ' 2>&1 | tee build.log
 
       - name: Collect & Verify Binaries
