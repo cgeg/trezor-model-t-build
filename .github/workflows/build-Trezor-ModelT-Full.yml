@@ -1,3 +1,16 @@
+name: Build Trezor Model T Development Suite
+
+‘on’:
+workflow_dispatch:
+
+permissions:
+contents: read
+
+jobs:
+build:
+runs-on: ubuntu-latest
+timeout-minutes: 120
+
 steps:
   - name: Free Disk Space
     run: |
@@ -6,7 +19,6 @@ steps:
         /opt/ghc \
         /opt/hostedtoolcache/CodeQL
       df -h
-
   - name: Checkout Trezor Firmware
     uses: actions/checkout@v4
     with:
@@ -14,16 +26,13 @@ steps:
       ref: main
       submodules: recursive
       fetch-depth: 1
-
   - name: Record Source Commit
     run: |
       mkdir -p dist
       git rev-parse HEAD | tee dist/SOURCE_COMMIT.txt
-
   - name: Initialize Submodules
     run: |
       git submodule update --init --recursive --force
-
   - name: Install Nix
     uses: cachix/install-nix-action@v31
     with:
@@ -36,113 +45,80 @@ steps:
         max-jobs = auto
         cores = 2
         fallback = true
-
   - name: Setup Cachix
     uses: cachix/cachix-action@v15
     with:
       name: nix-community
-
   - name: Build and Sign Model T Development Firmware
     shell: bash
     run: |
       set -Eeuo pipefail
-
       nix-shell --show-trace --run '
         set -Eeuo pipefail
-
         echo "=================================="
         echo "TREZOR MODEL T DEVELOPMENT BUILD"
         echo "=================================="
-
         echo "1. Building Boardloader"
-
         uv run xtask build boardloader \
           -m t2t1 \
           --bootloader-devel
-
         echo "2. Building Bootloader"
-
         uv run xtask build bootloader \
           -m t2t1 \
           --bootloader-devel
-
         echo "3. Building Firmware"
-
         uv run xtask build firmware \
           -m t2t1 \
           --bootloader-devel
-
         echo "=================================="
         echo "4. Signing Firmware with DEV KEYS"
         echo "=================================="
-
         FW="core/build/artifacts/T2T1/firmware.bin"
-
         test -s "$FW"
-
         cp "$FW" /tmp/firmware-unsigned.bin
-
         python core/tools/trezor_core_tools/headertool.py \
           -D "$FW"
-
         echo "=================================="
         echo "5. Inspecting Signed Firmware"
         echo "=================================="
-
         python core/tools/trezor_core_tools/headertool.py \
           -v "$FW"
-
         echo "=================================="
         echo "DEVELOPMENT BUILD COMPLETED"
         echo "=================================="
       ' 2>&1 | tee build.log
-
   - name: Collect Binaries
     shell: bash
     run: |
       set -Eeuo pipefail
-
       SRC="core/build/artifacts/T2T1"
-
       mkdir -p dist/boardloader
       mkdir -p dist/bootloader
       mkdir -p dist/firmware
-
       for file in boardloader bootloader firmware; do
-
         if [ ! -s "$SRC/$file.bin" ]; then
           echo "ERROR: Missing $file.bin"
           find core/build -name '*.bin'
           exit 1
         fi
-
       done
-
       cp "$SRC/boardloader.bin" \
         dist/boardloader/boardloader.bin
-
       cp "$SRC/bootloader.bin" \
         dist/bootloader/bootloader.bin
-
       cp "$SRC/firmware.bin" \
         dist/firmware/firmware.bin
-
       cp /tmp/firmware-unsigned.bin \
         dist/firmware/firmware-unsigned.bin
-
       echo "=== Binary Information ==="
-
       ls -lhR dist/
-
       echo "=== SHA256 ==="
-
       sha256sum \
         dist/boardloader/boardloader.bin \
         dist/bootloader/bootloader.bin \
         dist/firmware/firmware.bin \
         dist/firmware/firmware-unsigned.bin \
         | tee dist/SHA256SUMS.txt
-
   - name: Upload Development Suite
     uses: actions/upload-artifact@v4
     with:
@@ -150,7 +126,6 @@ steps:
       path: dist/
       if-no-files-found: error
       retention-days: 14
-
   - name: Upload Build Log
     if: always()
     uses: actions/upload-artifact@v4
