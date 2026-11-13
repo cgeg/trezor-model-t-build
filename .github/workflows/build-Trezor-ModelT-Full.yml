@@ -1,4 +1,5 @@
-name: Build Trezor Model T Full Suite (Non-Production)
+
+name: Build Trezor Model T Dev Suite (Non-Production)
 
 'on':
   workflow_dispatch:
@@ -14,7 +15,10 @@ jobs:
     steps:
       - name: Free Disk Space
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL
           df -h
 
       - name: Checkout Trezor Firmware
@@ -37,29 +41,52 @@ jobs:
         with:
           name: nix-community
 
-      - name: Build Boardloader, Bootloader & Firmware (Non-Production)
+      - name: Build Model T Non-Production
         run: |
-          set -e
-          nix-shell --run "
-            set -e
-            export PRODUCTION=0
+          set -euo pipefail
+
+          nix-shell --run '
+            set -euo pipefail
+
+            echo "=== Build Boardloader ==="
             uv run xtask build boardloader -m t2t1
-            uv run xtask build bootloader -m t2t1
+
+            echo "=== Build Development Bootloader ==="
+            uv run xtask build bootloader -m t2t1 --bootloader-devel
+
+            echo "=== Build Firmware ==="
             uv run xtask build firmware -m t2t1
-          "
+          '
 
-      - name: Collect & Verify All Binaries
+      - name: Collect & Verify Binaries
         run: |
-          echo "=== 列出所有編譯出的 .bin 檔案 ==="
-          find core/build* -type f -name '*.bin' -exec ls -lh {} +
+          set -euo pipefail
 
-          mkdir -p dist/boardloader dist/bootloader dist/firmware
-          find core/build* -type f -name 'boardloader-T2T1*.bin' -exec cp {} dist/boardloader/ \;
-          find core/build* -type f -name 'bootloader-T2T1*.bin' -exec cp {} dist/bootloader/ \;
-          find core/build* -type f \( -name 'firmware-T2T1*.bin' -o -name 'trezor-T2T1*.bin' \) -exec cp {} dist/firmware/ \;
+          SRC="core/build/artifacts/T2T1"
 
-          echo "=== 最終打包的三件組檔案 ==="
+          mkdir -p dist/boardloader
+          mkdir -p dist/bootloader
+          mkdir -p dist/firmware
+
+          for file in boardloader bootloader firmware; do
+            if [ ! -s "$SRC/$file.bin" ]; then
+              echo "ERROR: Missing binary: $SRC/$file.bin"
+              exit 1
+            fi
+          done
+
+          cp "$SRC/boardloader.bin" dist/boardloader/
+          cp "$SRC/bootloader.bin" dist/bootloader/
+          cp "$SRC/firmware.bin" dist/firmware/
+
+          echo "=== Model T Non-Production Binaries ==="
           ls -lhR dist/
+
+          echo "=== SHA256 Verification ==="
+          sha256sum \
+            dist/boardloader/boardloader.bin \
+            dist/bootloader/bootloader.bin \
+            dist/firmware/firmware.bin
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
