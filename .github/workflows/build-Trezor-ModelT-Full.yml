@@ -10,7 +10,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     steps:
       - name: Free Disk Space
@@ -27,6 +27,7 @@ jobs:
           repository: trezor/trezor-firmware
           ref: main
           submodules: recursive
+          fetch-depth: 1
 
       - name: Ensure Submodules
         run: |
@@ -36,17 +37,45 @@ jobs:
         uses: cachix/install-nix-action@v31
         with:
           nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            substituters = https://cache.nixos.org https://nix-community.cachix.org
+            connect-timeout = 15
+            stalled-download-timeout = 60
+            max-jobs = auto
+            cores = 2
+            fallback = true
 
       - name: Setup Cachix
         uses: cachix/cachix-action@v15
         with:
           name: nix-community
 
-      - name: Build Model T Development Suite
+      - name: Check Nix Environment
         run: |
-          set -euo pipefail
+          echo "=== Nix Version ==="
+          nix --version
 
-          nix-shell --run '
+          echo "=== Nix Channels ==="
+          nix-channel --list
+
+          echo "=== Nix Cache Configuration ==="
+          nix show-config | grep -E 'substituters|trusted-public-keys'
+
+          echo "=== Disk Space ==="
+          df -h
+
+          echo "=== Memory ==="
+          free -h
+
+      - name: Build Model T Development Suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "=== Starting Trezor Model T Build ==="
+
+          nix-shell --show-trace --run '
             set -euo pipefail
 
             echo "=== Boardloader: Development ==="
@@ -58,12 +87,13 @@ jobs:
             echo "=== Firmware: Development ==="
             uv run xtask build firmware -m t2t1 --bootloader-devel
 
-            echo "=== Build Complete ==="
-          '
+            echo "=== All Builds Completed ==="
+          ' 2>&1 | tee build.log
 
       - name: Collect & Verify Binaries
+        shell: bash
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
 
           SRC="core/build/artifacts/T2T1"
 
@@ -71,10 +101,19 @@ jobs:
           mkdir -p dist/bootloader
           mkdir -p dist/firmware
 
+          echo "=== Checking Build Artifacts ==="
+
+          if [ ! -d "$SRC" ]; then
+            echo "ERROR: Artifact directory not found: $SRC"
+            echo "Searching available BIN files..."
+            find core/build -type f -name '*.bin' || true
+            exit 1
+          fi
+
           for file in boardloader bootloader firmware; do
             if [ ! -s "$SRC/$file.bin" ]; then
               echo "ERROR: Missing binary: $SRC/$file.bin"
-              echo "Available artifacts:"
+              echo "Available BIN files:"
               find core/build -type f -name '*.bin' || true
               exit 1
             fi
@@ -84,14 +123,17 @@ jobs:
           cp "$SRC/bootloader.bin" dist/bootloader/
           cp "$SRC/firmware.bin" dist/firmware/
 
-          echo "=== Model T Development Binaries ==="
+          echo "=== Generated Binaries ==="
           ls -lhR dist/
 
-          echo "=== SHA256 Verification ==="
+          echo "=== SHA256 Checksums ==="
           sha256sum \
             dist/boardloader/boardloader.bin \
             dist/bootloader/bootloader.bin \
-            dist/firmware/firmware.bin
+            dist/firmware/firmware.bin \
+            | tee dist/SHA256SUMS.txt
+
+          echo "=== Build Verification Completed ==="
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
@@ -100,3 +142,12 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload Build Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trezor-model-t-build-log
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 7
