@@ -1,4 +1,4 @@
-name: Build Trezor Model T Dev Suite (Verified Dev Keys)
+name: Build Trezor Model T Dev Suite (Cryptographically Verified)
 
 'on':
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
         with:
           name: nix-community
 
-      - name: Build & Dev-Sign Model T Suite
+      - name: Build, Sign & Cryptographically Verify Model T Dev Suite
         run: |
           set -euo pipefail
           nix-shell --run '
@@ -48,43 +48,66 @@ jobs:
             export PRODUCTION=0
             export TREZOR_MODEL=T2T1
 
-            echo "=== 檢查 xtask build 可用參數 ==="
-            uv run xtask build --help
-
-            echo "=== 1. Build Boardloader (PRODUCTION=0, Dev Public Keys) ==="
+            echo "=== 1. Build Boardloader (Non-Production) ==="
             uv run xtask build boardloader -m t2t1
 
-            echo "=== 2. Build Bootloader & Firmware (PRODUCTION=0) ==="
+            echo "=== 2. Build Bootloader (Non-Production) ==="
             uv run xtask build bootloader -m t2t1
+
+            echo "=== 3. Build Firmware (Non-Production) ==="
             uv run xtask build firmware -m t2t1
 
-            echo "=== 3. Inspect & Sign Headers ==="
-            SRC="core/build/artifacts/T2T1"
-            PYTHONPATH=core/tools uv run python -m trezor_core_tools.headertool --help
+            echo "=== 4. Locate Real Output Artifacts Directory ==="
+            if [ -f "core/build-xtask/artifacts/latest/boardloader.bin" ]; then
+              SRC="core/build-xtask/artifacts/latest"
+            elif [ -f "core/build-xtask/artifacts/T2T1/boardloader.bin" ]; then
+              SRC="core/build-xtask/artifacts/T2T1"
+            elif [ -f "core/build/artifacts/T2T1/boardloader.bin" ]; then
+              SRC="core/build/artifacts/T2T1"
+            else
+              echo "ERROR: Cannot locate artifacts directory!"
+              find core/ -name "boardloader.bin"
+              exit 1
+            fi
+            echo "Found artifacts at: $SRC"
+
+            echo "=== 5. Rehash & Sign Bootloader and Firmware with Dev Keys ==="
+            PYTHONPATH=core/tools uv run python -m trezor_core_tools.headertool -h "$SRC/bootloader.bin"
             PYTHONPATH=core/tools uv run python -m trezor_core_tools.headertool -D "$SRC/bootloader.bin"
+
+            PYTHONPATH=core/tools uv run python -m trezor_core_tools.headertool -h "$SRC/firmware.bin"
             PYTHONPATH=core/tools uv run python -m trezor_core_tools.headertool -D "$SRC/firmware.bin"
 
-            echo "=== 4. Verify Bootloader & Firmware Headers ==="
-            PYTHONPATH=core/tools uv run python -m trezor_core_tools.headertool "$SRC/bootloader.bin"
-            PYTHONPATH=core/tools uv run python -m trezor_core_tools.headertool "$SRC/firmware.bin"
+            echo "=== 6. Cryptographic Signature Verification (trezorlib) ==="
+            SRC_DIR="$SRC" uv run python -c "
+import os, pathlib
+from trezorlib._internal import firmware_headers
+
+src = pathlib.Path(os.environ[\"SRC_DIR\"])
+for name in [\"bootloader.bin\", \"firmware.bin\"]:
+    data = (src / name).read_bytes()
+    img = firmware_headers.parse_image(data)
+    img.verify(dev_keys=True)
+    print(f\"[OK] {name}: Cryptographic Dev-Key signature is 100% VALID!\")
+"
+            mkdir -p dist/boardloader dist/bootloader dist/firmware
+            cp "$SRC/boardloader.bin" dist/boardloader/
+            cp "$SRC/bootloader.bin" dist/bootloader/
+            cp "$SRC/firmware.bin" dist/firmware/
           '
 
-      - name: Collect & Verify Binaries
+      - name: Verify Final Output & Checksums
         run: |
           set -euo pipefail
-          SRC="core/build/artifacts/T2T1"
-          mkdir -p dist/boardloader dist/bootloader dist/firmware
-          for file in boardloader bootloader firmware; do
-            if [ ! -s "$SRC/$file.bin" ]; then
-              echo "ERROR: Missing binary: $SRC/$file.bin"
+          for file in dist/boardloader/boardloader.bin dist/bootloader/bootloader.bin dist/firmware/firmware.bin; do
+            if [ ! -s "$file" ]; then
+              echo "ERROR: Missing or empty binary: $file"
               exit 1
             fi
           done
-          cp "$SRC/boardloader.bin" dist/boardloader/
-          cp "$SRC/bootloader.bin" dist/bootloader/
-          cp "$SRC/firmware.bin" dist/firmware/
-
+          echo "=== Final Verified Model T Dev Suite ==="
           ls -lhR dist/
+          echo "=== SHA256 Checksums ==="
           sha256sum \
             dist/boardloader/boardloader.bin \
             dist/bootloader/bootloader.bin \
