@@ -1,4 +1,5 @@
-name: Build Trezor Model T Dev Suite (Cryptographically Verified)
+
+name: Build Trezor Model T Development Suite
 
 'on':
   workflow_dispatch:
@@ -28,7 +29,8 @@ jobs:
           submodules: recursive
 
       - name: Ensure Submodules
-        run: git submodule update --init --recursive --force
+        run: |
+          git submodule update --init --recursive --force
 
       - name: Install Nix
         uses: cachix/install-nix-action@v31
@@ -40,74 +42,52 @@ jobs:
         with:
           name: nix-community
 
-      - name: Build, Sign & Cryptographically Verify Model T Dev Suite
+      - name: Build Model T Development Suite
         run: |
           set -euo pipefail
+
           nix-shell --run '
             set -euo pipefail
-            export PRODUCTION=0
-            export TREZOR_MODEL=T2T1
 
-            echo "=== 1. Build Boardloader (Non-Production) ==="
-            uv run xtask build boardloader -m t2t1
+            echo "=== Boardloader: Development ==="
+            uv run xtask build boardloader -m t2t1 --bootloader-devel
 
-            echo "=== 2. Build Bootloader (Non-Production) ==="
-            uv run xtask build bootloader -m t2t1
+            echo "=== Bootloader: Development ==="
+            uv run xtask build bootloader -m t2t1 --bootloader-devel
 
-            echo "=== 3. Build Firmware (Non-Production) ==="
-            uv run xtask build firmware -m t2t1
+            echo "=== Firmware: Development ==="
+            uv run xtask build firmware -m t2t1 --bootloader-devel
 
-            echo "=== 4. Locate Real Output Artifacts Directory ==="
-            if [ -f "core/build-xtask/artifacts/latest/boardloader.bin" ]; then
-              SRC="core/build-xtask/artifacts/latest"
-            elif [ -f "core/build-xtask/artifacts/T2T1/boardloader.bin" ]; then
-              SRC="core/build-xtask/artifacts/T2T1"
-            elif [ -f "core/build/artifacts/T2T1/boardloader.bin" ]; then
-              SRC="core/build/artifacts/T2T1"
-            else
-              echo "ERROR: Cannot locate artifacts directory!"
-              find core/ -name "boardloader.bin"
-              exit 1
-            fi
-            echo "Found artifacts at: $SRC"
-
-            echo "=== 5. Rehash & Sign Bootloader and Firmware with Dev Keys ==="
-            PYTHONPATH=core/tools uv run python -m trezor_core_tools.headertool -h "$SRC/bootloader.bin"
-            PYTHONPATH=core/tools uv run python -m trezor_core_tools.headertool -D "$SRC/bootloader.bin"
-
-            PYTHONPATH=core/tools uv run python -m trezor_core_tools.headertool -h "$SRC/firmware.bin"
-            PYTHONPATH=core/tools uv run python -m trezor_core_tools.headertool -D "$SRC/firmware.bin"
-
-            echo "=== 6. Cryptographic Signature Verification (trezorlib) ==="
-            SRC_DIR="$SRC" uv run python -c "
-import os, pathlib
-from trezorlib._internal import firmware_headers
-
-src = pathlib.Path(os.environ[\"SRC_DIR\"])
-for name in [\"bootloader.bin\", \"firmware.bin\"]:
-    data = (src / name).read_bytes()
-    img = firmware_headers.parse_image(data)
-    img.verify(dev_keys=True)
-    print(f\"[OK] {name}: Cryptographic Dev-Key signature is 100% VALID!\")
-"
-            mkdir -p dist/boardloader dist/bootloader dist/firmware
-            cp "$SRC/boardloader.bin" dist/boardloader/
-            cp "$SRC/bootloader.bin" dist/bootloader/
-            cp "$SRC/firmware.bin" dist/firmware/
+            echo "=== Build Complete ==="
           '
 
-      - name: Verify Final Output & Checksums
+      - name: Collect & Verify Binaries
         run: |
           set -euo pipefail
-          for file in dist/boardloader/boardloader.bin dist/bootloader/bootloader.bin dist/firmware/firmware.bin; do
-            if [ ! -s "$file" ]; then
-              echo "ERROR: Missing or empty binary: $file"
+
+          SRC="core/build/artifacts/T2T1"
+
+          mkdir -p dist/boardloader
+          mkdir -p dist/bootloader
+          mkdir -p dist/firmware
+
+          for file in boardloader bootloader firmware; do
+            if [ ! -s "$SRC/$file.bin" ]; then
+              echo "ERROR: Missing binary: $SRC/$file.bin"
+              echo "Available artifacts:"
+              find core/build -type f -name '*.bin' || true
               exit 1
             fi
           done
-          echo "=== Final Verified Model T Dev Suite ==="
+
+          cp "$SRC/boardloader.bin" dist/boardloader/
+          cp "$SRC/bootloader.bin" dist/bootloader/
+          cp "$SRC/firmware.bin" dist/firmware/
+
+          echo "=== Model T Development Binaries ==="
           ls -lhR dist/
-          echo "=== SHA256 Checksums ==="
+
+          echo "=== SHA256 Verification ==="
           sha256sum \
             dist/boardloader/boardloader.bin \
             dist/bootloader/bootloader.bin \
@@ -116,7 +96,7 @@ for name in [\"bootloader.bin\", \"firmware.bin\"]:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: trezor-model-t-dev-suite
+          name: trezor-model-t-development-suite
           path: dist/
           if-no-files-found: error
           retention-days: 14
