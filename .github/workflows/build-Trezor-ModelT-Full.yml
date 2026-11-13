@@ -1,4 +1,3 @@
-
 name: Build Trezor Model T Development Suite
 
 'on':
@@ -11,14 +10,13 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-
     steps:
       - name: Free Disk Space
         run: |
           sudo rm -rf /usr/share/dotnet \
-            /usr/local/lib/android \
-            /opt/ghc \
-            /opt/hostedtoolcache/CodeQL
+                      /usr/local/lib/android \
+                      /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL
           df -h
 
       - name: Checkout Trezor Firmware
@@ -39,7 +37,7 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-            substituters = https://cache.nixos.org https://nix-community.cachix.org
+            substituters = https://nixos.org https://cachix.org
             connect-timeout = 15
             stalled-download-timeout = 60
             max-jobs = auto
@@ -55,29 +53,22 @@ jobs:
         run: |
           echo "=== Nix Version ==="
           nix --version
-
           echo "=== Nix Channels ==="
           nix-channel --list
-
           echo "=== Nix Cache Configuration ==="
           nix show-config | grep -E 'substituters|trusted-public-keys'
-
           echo "=== Disk Space ==="
           df -h
-
           echo "=== Memory ==="
           free -h
 
-      - name: Build Model T Development Suite
+      - name: Build & Sign Model T Development Suite
         shell: bash
         run: |
           set -Eeuo pipefail
-
           echo "=== Starting Trezor Model T Build ==="
-
           nix-shell --show-trace --run '
             set -euo pipefail
-
             echo "=== Boardloader: Development ==="
             uv run xtask build boardloader -m t2t1 --bootloader-devel
 
@@ -87,22 +78,27 @@ jobs:
             echo "=== Firmware: Development ==="
             uv run xtask build firmware -m t2t1 --bootloader-devel
 
-            echo "=== All Builds Completed ==="
+            echo "=== Signing Firmware with Development Keys ==="
+            cp core/build/artifacts/T2T1/firmware.bin core/build/artifacts/T2T1/firmware-unsigned.bin
+            if uv run trezorctl --version >/dev/null 2>&1; then
+              uv run trezorctl firmware sign --devel core/build/artifacts/T2T1/firmware.bin
+            else
+              trezorctl firmware sign --devel core/build/artifacts/T2T1/firmware.bin
+            fi
+
+            echo "=== All Builds & Signing Completed ==="
           ' 2>&1 | tee build.log
 
       - name: Collect & Verify Binaries
         shell: bash
         run: |
           set -Eeuo pipefail
-
           SRC="core/build/artifacts/T2T1"
-
           mkdir -p dist/boardloader
           mkdir -p dist/bootloader
           mkdir -p dist/firmware
 
           echo "=== Checking Build Artifacts ==="
-
           if [ ! -d "$SRC" ]; then
             echo "ERROR: Artifact directory not found: $SRC"
             echo "Searching available BIN files..."
@@ -110,7 +106,7 @@ jobs:
             exit 1
           fi
 
-          for file in boardloader bootloader firmware; do
+          for file in boardloader bootloader firmware firmware-unsigned; do
             if [ ! -s "$SRC/$file.bin" ]; then
               echo "ERROR: Missing binary: $SRC/$file.bin"
               echo "Available BIN files:"
@@ -122,6 +118,7 @@ jobs:
           cp "$SRC/boardloader.bin" dist/boardloader/
           cp "$SRC/bootloader.bin" dist/bootloader/
           cp "$SRC/firmware.bin" dist/firmware/
+          cp "$SRC/firmware-unsigned.bin" dist/firmware/
 
           echo "=== Generated Binaries ==="
           ls -lhR dist/
@@ -131,6 +128,7 @@ jobs:
             dist/boardloader/boardloader.bin \
             dist/bootloader/bootloader.bin \
             dist/firmware/firmware.bin \
+            dist/firmware/firmware-unsigned.bin \
             | tee dist/SHA256SUMS.txt
 
           echo "=== Build Verification Completed ==="
