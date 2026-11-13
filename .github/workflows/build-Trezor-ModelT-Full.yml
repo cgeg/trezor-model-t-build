@@ -59,12 +59,12 @@ jobs:
 
             echo "=== 4. Sign Bootloader & Firmware with Dev Keys ==="
             SRC="core/build/artifacts/T2T1"
-            uv run --directory core/tools python -m trezor_core_tools.headertool -D "$SRC/bootloader.bin"
-            uv run --directory core/tools python -m trezor_core_tools.headertool -D "$SRC/firmware.bin"
+            PYTHONPATH=core/tools uv run python -m trezor_core_tools.headertool -D "$SRC/bootloader.bin"
+            PYTHONPATH=core/tools uv run python -m trezor_core_tools.headertool -D "$SRC/firmware.bin"
 
             echo "=== 5. Verify Signatures ==="
-            uv run --directory core/tools python -m trezor_core_tools.headertool "$SRC/bootloader.bin"
-            uv run --directory core/tools python -m trezor_core_tools.headertool "$SRC/firmware.bin"
+            PYTHONPATH=core/tools uv run python -m trezor_core_tools.headertool "$SRC/bootloader.bin"
+            PYTHONPATH=core/tools uv run python -m trezor_core_tools.headertool "$SRC/firmware.bin"
           '
 
       - name: Collect & Verify Binaries
