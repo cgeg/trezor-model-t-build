@@ -31,50 +31,45 @@ jobs:
         run: |
           git submodule update --init --recursive --force
 
-      - name: Patch Bootloader to Ignore Signature
+      - name: Inspect & Patch Bootloader Signature Check
         shell: bash
         run: |
           set -Eeuo pipefail
-          echo "=== Patching Bootloader Signature Verification ==="
+          echo "=== Searching Bootloader Verification Functions ==="
+          grep -rn "verify\|signature\|check_firmware\|vendor" core/embed/projects/bootloader/ || true
+
           python3 -c '
           import glob, re
 
-          # 搜尋 bootloader 與相關共用模組中的簽章與標頭驗證函式
-          target_files = glob.glob("core/embed/**/*.c", recursive=True)
-          patched_count = 0
+          # 僅針對 bootloader 專案資料夾進行精準修改，不碰共用底層以免影響 boardloader
+          bl_files = glob.glob("core/embed/projects/bootloader/**/*.c", recursive=True)
+          patched = 0
 
-          for filepath in target_files:
-              if "bootloader" not in filepath and "image" not in filepath and "check" not in filepath:
-                  continue
+          for filepath in bl_files:
               with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
                   content = f.read()
 
               new_content = content
-              # 1. 讓 check_firmware_header 或類似的標頭簽章驗證直接回傳 sectrue / true
+              # 將 bootloader 內部呼叫簽章或標頭檢查失敗的判斷條件替換為通過
+              # 1. 常見寫法: if (sectrue != check_firmware_header(...)) 或 if (!check_...)
               new_content = re.sub(
-                  r"(secbool\s+(?:check_firmware_header|verify_firmware|firmware_verify|check_image_header)\s*\([^)]*\)\s*\{)",
-                  r"\1 return sectrue;",
+                  r"if\s*\(\s*sectrue\s*!=\s*(check_[a-zA-Z0-9_]+|verify_[a-zA-Z0-9_]+)\s*\(",
+                  r"if (secfalse == sectrue && sectrue != \1(",
                   new_content
               )
-              # 2. 讓簽章比對底層函式 (如 secp256r1_verify / ed25519_sign_open) 在 bootloader 專案中直接通過
-              if "bootloader" in filepath:
-                  new_content = re.sub(
-                      r"(secbool\s+[a-zA-Z0-9_]*verify[a-zA-Z0-9_]*\s*\([^)]*\)\s*\{)",
-                      r"\1 return sectrue;",
-                      new_content
-                  )
+              new_content = re.sub(
+                  r"if\s*\(\s*!\s*(check_[a-zA-Z0-9_]+|verify_[a-zA-Z0-9_]+)\s*\(",
+                  r"if (0 && !\1(",
+                  new_content
+              )
 
               if new_content != content:
                   with open(filepath, "w", encoding="utf-8") as f:
                       f.write(new_content)
-                  print(f"Patched: {filepath}")
-                  patched_count += 1
+                  print(f"Safely patched condition in: {filepath}")
+                  patched += 1
 
-          print(f"Total files patched: {patched_count}")
-          if patched_count == 0:
-              print("WARNING: No files matched regex, listing bootloader files for inspection:")
-              for f in glob.glob("core/embed/projects/bootloader/**/*.c", recursive=True):
-                  print(" -", f)
+          print(f"Total bootloader files patched: {patched}")
           '
 
       - name: Install Nix
@@ -91,39 +86,24 @@ jobs:
             cores = 2
             fallback = true
 
-      - name: Check Nix & Cache Connectivity
-        run: |
-          echo "=== Nix Version ==="
-          nix --version
-          curl -I --retry 5 --retry-delay 5 https://nixos.org/nix-cache-info
-          curl -I --retry 5 --retry-delay 5 https://cachix.org/nix-cache-info
-
-      - name: Build Model T Development Suite (No-Sig)
+      - name: Build Model T Development Suite
         shell: bash
         run: |
           set -Eeuo pipefail
           echo "=== Starting Trezor Model T Build ==="
-          for attempt in 1 2 3; do
-            echo "=== Attempt $attempt to enter nix-shell and build ==="
-            if nix-shell --show-trace --run '
-              set -euo pipefail
-              echo "=== Boardloader: Development ==="
-              uv run xtask build boardloader -m t2t1 --bootloader-devel
+          nix-shell --show-trace --run '
+            set -euo pipefail
+            echo "=== Boardloader: Development ==="
+            uv run xtask build boardloader -m t2t1 --bootloader-devel
 
-              echo "=== Bootloader: Development ==="
-              uv run xtask build bootloader -m t2t1 --bootloader-devel
+            echo "=== Bootloader: Development (No-Sig Patched) ==="
+            uv run xtask build bootloader -m t2t1 --bootloader-devel
 
-              echo "=== Firmware: Development ==="
-              uv run xtask build firmware -m t2t1 --bootloader-devel
+            echo "=== Firmware: Development ==="
+            uv run xtask build firmware -m t2t1 --bootloader-devel
 
-              echo "=== All Builds Completed ==="
-            ' 2>&1 | tee build.log; then
-              break
-            else
-              echo "Attempt $attempt failed. Waiting 15 seconds before retry..."
-              sleep 15
-            fi
-          done
+            echo "=== All Builds Completed ==="
+          ' 2>&1 | tee build.log
 
       - name: Collect & Verify Binaries
         shell: bash
@@ -137,6 +117,7 @@ jobs:
           for file in boardloader bootloader firmware; do
             if [ ! -s "$SRC/$file.bin" ]; then
               echo "ERROR: Missing binary: $SRC/$file.bin"
+              tail -n 50 build.log || true
               exit 1
             fi
           done
