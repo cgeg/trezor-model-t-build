@@ -37,38 +37,25 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-            substituters = https://nixos.org https://cachix.org https://cachix.org
-            trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs= trezor.cachix.org-1:E5+A1m0mB1+e4O0lF2S1x8Q6A7B8C9D0E1F2G3H4I5J=
-            connect-timeout = 15
-            stalled-download-timeout = 60
+            substituters = https://cache.nixos.org https://nix-community.cachix.org
+            trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs=
+            connect-timeout = 30
+            stalled-download-timeout = 120
             max-jobs = auto
             cores = 2
             fallback = true
 
-      - name: Setup Cachix (nix-community)
-        uses: cachix/cachix-action@v15
-        with:
-          name: nix-community
-          skipPush: true
-
-      - name: Setup Cachix (trezor)
-        uses: cachix/cachix-action@v15
-        continue-on-error: true
-        with:
-          name: trezor
-          skipPush: true
-
-      - name: Check Nix Environment
+      - name: Check Nix & Cache Connectivity
         run: |
           echo "=== Nix Version ==="
           nix --version
-          echo "=== Nix Channels ==="
-          nix-channel --list
           echo "=== Nix Cache Configuration ==="
           nix show-config | grep -E 'substituters|trusted-public-keys'
-          echo "=== Disk Space ==="
+          echo "=== Testing Cache Connectivity ==="
+          curl -I --retry 5 --retry-delay 5 https://nixos.org
+          curl -I --retry 5 --retry-delay 5 https://cachix.org
+          echo "=== Disk Space & Memory ==="
           df -h
-          echo "=== Memory ==="
           free -h
 
       - name: Build & Sign Model T Development Suite
@@ -76,27 +63,37 @@ jobs:
         run: |
           set -Eeuo pipefail
           echo "=== Starting Trezor Model T Build ==="
-          nix-shell --show-trace --run '
-            set -euo pipefail
-            echo "=== Boardloader: Development ==="
-            uv run xtask build boardloader -m t2t1 --bootloader-devel
+          
+          # 加入重試機制，避免暫時性網路波動導致快取下載中斷
+          for attempt in 1 2 3; do
+            echo "=== Attempt $attempt to enter nix-shell and build ==="
+            if nix-shell --show-trace --run '
+              set -euo pipefail
+              echo "=== Boardloader: Development ==="
+              uv run xtask build boardloader -m t2t1 --bootloader-devel
 
-            echo "=== Bootloader: Development ==="
-            uv run xtask build bootloader -m t2t1 --bootloader-devel
+              echo "=== Bootloader: Development ==="
+              uv run xtask build bootloader -m t2t1 --bootloader-devel
 
-            echo "=== Firmware: Development ==="
-            uv run xtask build firmware -m t2t1 --bootloader-devel
+              echo "=== Firmware: Development ==="
+              uv run xtask build firmware -m t2t1 --bootloader-devel
 
-            echo "=== Signing Firmware with Development Keys ==="
-            cp core/build/artifacts/T2T1/firmware.bin core/build/artifacts/T2T1/firmware-unsigned.bin
-            if uv run trezorctl --version >/dev/null 2>&1; then
-              uv run trezorctl firmware sign --devel core/build/artifacts/T2T1/firmware.bin
+              echo "=== Signing Firmware with Development Keys ==="
+              cp core/build/artifacts/T2T1/firmware.bin core/build/artifacts/T2T1/firmware-unsigned.bin
+              if uv run trezorctl --version >/dev/null 2>&1; then
+                uv run trezorctl firmware sign --devel core/build/artifacts/T2T1/firmware.bin
+              else
+                trezorctl firmware sign --devel core/build/artifacts/T2T1/firmware.bin
+              fi
+
+              echo "=== All Builds & Signing Completed ==="
+            ' 2>&1 | tee build.log; then
+              break
             else
-              trezorctl firmware sign --devel core/build/artifacts/T2T1/firmware.bin
+              echo "Attempt $attempt failed. Waiting 15 seconds before retry..."
+              sleep 15
             fi
-
-            echo "=== All Builds & Signing Completed ==="
-          ' 2>&1 | tee build.log
+          done
 
       - name: Collect & Verify Binaries
         shell: bash
@@ -110,7 +107,6 @@ jobs:
           echo "=== Checking Build Artifacts ==="
           if [ ! -d "$SRC" ]; then
             echo "ERROR: Artifact directory not found: $SRC"
-            echo "Searching available BIN files..."
             find core/build -type f -name '*.bin' || true
             exit 1
           fi
@@ -118,7 +114,6 @@ jobs:
           for file in boardloader bootloader firmware firmware-unsigned; do
             if [ ! -s "$SRC/$file.bin" ]; then
               echo "ERROR: Missing binary: $SRC/$file.bin"
-              echo "Available BIN files:"
               find core/build -type f -name '*.bin' || true
               exit 1
             fi
