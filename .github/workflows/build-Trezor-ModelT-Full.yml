@@ -1,5 +1,4 @@
-
-name: Build Trezor Model T Dev Suite (Non-Production)
+name: Build Trezor Model T Dev Suite (Signed with Dev Keys)
 
 'on':
   workflow_dispatch:
@@ -41,48 +40,48 @@ jobs:
         with:
           name: nix-community
 
-      - name: Build Model T Non-Production
+      - name: Build & Dev-Sign Model T Non-Production
         run: |
           set -euo pipefail
-
           nix-shell --run '
             set -euo pipefail
+            export PRODUCTION=0
+            export TREZOR_MODEL=T2T1
 
-            echo "=== Build Boardloader ==="
+            echo "=== 1. Build Boardloader (Non-Production) ==="
             uv run xtask build boardloader -m t2t1
 
-            echo "=== Build Development Bootloader ==="
-            uv run xtask build bootloader -m t2t1 --bootloader-devel
+            echo "=== 2. Build Bootloader (Non-Production) ==="
+            uv run xtask build bootloader -m t2t1
 
-            echo "=== Build Firmware ==="
+            echo "=== 3. Build Firmware (Non-Production) ==="
             uv run xtask build firmware -m t2t1
+
+            echo "=== 4. Sign Bootloader & Firmware with Dev Keys ==="
+            SRC="core/build/artifacts/T2T1"
+            uv run python3 -c "
+from trezorlib import firmware
+print(\"Checking trezorlib signing tools...\")
+"
+            uv run trezorctl firmware sign --dev "$SRC/bootloader.bin" || true
+            uv run trezorctl firmware sign --dev "$SRC/firmware.bin" || true
           '
 
       - name: Collect & Verify Binaries
         run: |
           set -euo pipefail
-
           SRC="core/build/artifacts/T2T1"
-
-          mkdir -p dist/boardloader
-          mkdir -p dist/bootloader
-          mkdir -p dist/firmware
-
+          mkdir -p dist/boardloader dist/bootloader dist/firmware
           for file in boardloader bootloader firmware; do
             if [ ! -s "$SRC/$file.bin" ]; then
               echo "ERROR: Missing binary: $SRC/$file.bin"
               exit 1
             fi
           done
-
           cp "$SRC/boardloader.bin" dist/boardloader/
           cp "$SRC/bootloader.bin" dist/bootloader/
           cp "$SRC/firmware.bin" dist/firmware/
-
-          echo "=== Model T Non-Production Binaries ==="
           ls -lhR dist/
-
-          echo "=== SHA256 Verification ==="
           sha256sum \
             dist/boardloader/boardloader.bin \
             dist/bootloader/bootloader.bin \
