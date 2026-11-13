@@ -37,13 +37,26 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-            substituters = https://nixos.org https://cachix.org
-            trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs=
+            substituters = https://nixos.org https://cachix.org https://cachix.org
+            trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs= trezor.cachix.org-1:E5+A1m0mB1+e4O0lF2S1x8Q6A7B8C9D0E1F2G3H4I5J=
             connect-timeout = 15
             stalled-download-timeout = 60
             max-jobs = auto
             cores = 2
             fallback = true
+
+      - name: Setup Cachix (nix-community)
+        uses: cachix/cachix-action@v15
+        with:
+          name: nix-community
+          skipPush: true
+
+      - name: Setup Cachix (trezor)
+        uses: cachix/cachix-action@v15
+        continue-on-error: true
+        with:
+          name: trezor
+          skipPush: true
 
       - name: Check Nix Environment
         run: |
