@@ -1,4 +1,4 @@
-name: Build Trezor Model T Full Suite (Non-Production)
+name: Build Trezor Model T Full Suite (Fast & Non-Production)
 
 'on':
   workflow_dispatch:
@@ -9,8 +9,14 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h
+
       - name: Checkout Trezor Firmware
         uses: actions/checkout@v4
         with:
@@ -21,17 +27,22 @@ jobs:
       - name: Ensure Submodules
         run: git submodule update --init --recursive --force
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-
-      - name: Build Boardloader, Bootloader & Firmware (Non-Production)
+      - name: Build Full Suite via Official Docker (Non-Production)
         run: |
-          nix-shell --run "
-            export PRODUCTION=0
-            uv run xtask build boardloader -m t2t1
-            uv run xtask build bootloader -m t2t1
-            uv run xtask build firmware -m t2t1
-          "
+          set -e
+          docker run --rm \
+            -v "$(pwd):/workspace" \
+            -w /workspace \
+            -e PRODUCTION=0 \
+            -e TREZOR_MODEL=T2T1 \
+            ghcr.io/trezor/trezor-firmware-env.nix:latest \
+            nix-shell --run "
+              set -e
+              export PRODUCTION=0
+              uv run xtask build boardloader -m t2t1
+              uv run xtask build bootloader -m t2t1
+              uv run xtask build firmware -m t2t1
+            "
 
       - name: Collect & Verify All Binaries
         run: |
@@ -49,4 +60,3 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 14
-
