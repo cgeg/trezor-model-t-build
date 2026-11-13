@@ -1,24 +1,26 @@
+
 name: Build Trezor Model T Development Suite
 
-‘on’:
-workflow_dispatch:
+on:
+  workflow_dispatch:
 
 permissions:
-contents: read
+  contents: read
 
 jobs:
-build:
-runs-on: ubuntu-latest
-timeout-minutes: 120
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
 
-steps:
-  - name: Free Disk Space
-    run: |
-      sudo rm -rf /usr/share/dotnet \
-        /usr/local/lib/android \
-        /opt/ghc \
-        /opt/hostedtoolcache/CodeQL
-      df -h
+    steps:
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL
+          df -h
+
   - name: Checkout Trezor Firmware
     uses: actions/checkout@v4
     with:
